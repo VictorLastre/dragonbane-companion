@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@layer base {
+  body {
+    @apply bg-stone-900 text-stone-100 min-h-screen font-sans antialiased selection:bg-amber-700 selection:text-white;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}
+
+/* Estilo temático de pergamino nórdico para Dragonbane */
+.parchment-card {
+  background: radial-gradient(circle at 50% 0%, #292524 0%, #1c1917 100%);
+  border: 1px solid #44403c;
+}
+
+.gold-accent {
+  color: #fbbf24;
+}

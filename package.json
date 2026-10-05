@@ -1,0 +1,10 @@
+{
+  "name": "dragonbane-companion-workspace",
+  "version": "1.0.0",
+  "description": "Aplicación de apoyo para campañas de Dragonbane RPG (Local + Hostinger)",
+  "scripts": {
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:api": "php -S localhost:8000 -t api",
+    "build": "cd frontend && npm run build"
+  }
+}

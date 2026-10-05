@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Production build artifacts
+dist/
+frontend/dist/
+
+# Environment credentials (nunca subir contraseñas a git)
+.env
+api/.env
+frontend/.env.local
+
+# Manuales pesados y archivos de extracción temporales
+*.pdf
+Dragonbane_Reglas.pdf
+*.txt
+*.json
+!package.json
+!frontend/package.json
+
+# Logs y cachés
+*.log
+npm-debug.log*
+.system_generated/
+scratch/
+
+# IDE / Sistema operativo
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
