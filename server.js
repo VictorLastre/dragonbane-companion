@@ -110,7 +110,47 @@ async function initDatabase() {
       ON DUPLICATE KEY UPDATE \`id\` = 1;
     `);
 
-    console.log('✓ Base de datos y tablas de Dragonbane listas');
+    await p.query(`
+      CREATE TABLE IF NOT EXISTS \`campaigns\` (
+        \`id\` INT AUTO_INCREMENT PRIMARY KEY,
+        \`code\` VARCHAR(32) UNIQUE NOT NULL,
+        \`name\` VARCHAR(150) NOT NULL,
+        \`description\` TEXT,
+        \`gm_name\` VARCHAR(100) DEFAULT 'Director de Juego',
+        \`gm_pass\` VARCHAR(100) NOT NULL,
+        \`created_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    `);
+
+    // Helper seguro para añadir columnas si no existen
+    const checkAndAddColumn = async (table, col, colDef) => {
+      try {
+        const [cols] = await p.query(
+          `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+          [dbConfig.database, table, col]
+        );
+        if (cols.length === 0) {
+          await p.query(`ALTER TABLE \`${table}\` ADD COLUMN \`${col}\` ${colDef}`);
+          console.log(`✓ Columna ${col} añadida a ${table}`);
+        }
+      } catch (e) {
+        console.warn(`Aviso migración columna ${col}:`, e.message);
+      }
+    };
+
+    await checkAndAddColumn('characters', 'weakness', 'VARCHAR(255) DEFAULT ""');
+    await checkAndAddColumn('characters', 'secondary_skills', 'JSON');
+    await checkAndAddColumn('characters', 'heroic_abilities_and_spells', 'TEXT');
+    await checkAndAddColumn('characters', 'helmet', 'JSON');
+    await checkAndAddColumn('characters', 'rests', 'JSON');
+    await checkAndAddColumn('characters', 'death_saves', 'JSON');
+    await checkAndAddColumn('characters', 'campaign_code', 'VARCHAR(32) NULL');
+    await checkAndAddColumn('characters', 'player_token', 'VARCHAR(64) NULL');
+    await checkAndAddColumn('characters', 'is_npc', 'TINYINT(1) DEFAULT 0');
+    await checkAndAddColumn('screen_broadcast', 'campaign_code', 'VARCHAR(32) NULL');
+
+    console.log('✓ Base de datos, campañas y tablas de Dragonbane listas');
   } catch (err) {
     console.error('Aviso de conexión MySQL:', err.message);
   }
@@ -145,11 +185,134 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// GET Personajes (todos o por ID)
+// Helper generar código de campaña limpio y amigable
+function generateCampaignCode(name) {
+  const clean = (name || 'DRAGON')
+    .toUpperCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 6) || 'DRAGON';
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase();
+  return `${clean}-${rand}`;
+}
+
+// -------------------------------------------------------------
+// CAMPAÑAS Y ROLES (DIRECTOR DE JUEGO / JUGADORES)
+// -------------------------------------------------------------
+
+// POST Crear Campaña
+app.post(['/api/campaigns', '/api/campaigns.php'], async (req, res) => {
+  try {
+    const { name, description, gm_name, gm_pass } = req.body;
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre de la campaña es obligatorio' });
+    }
+    const code = generateCampaignCode(name);
+    const pass = gm_pass && gm_pass.trim() ? gm_pass.trim() : 'master123';
+    const gm = gm_name && gm_name.trim() ? gm_name.trim() : 'Director de Juego';
+
+    const p = await getPool();
+    const [result] = await p.query(
+      'INSERT INTO campaigns (code, name, description, gm_name, gm_pass) VALUES (?, ?, ?, ?, ?)',
+      [code, name.trim(), description || '', gm, pass]
+    );
+
+    res.status(201).json({
+      success: true,
+      campaign: {
+        id: result.insertId,
+        code,
+        name: name.trim(),
+        description: description || '',
+        gm_name: gm
+      },
+      is_gm: true,
+      message: 'Campaña creada con éxito'
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// GET Consultar Campaña y Resumen de Héroes del Grupo (Party HUD)
+app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
+  try {
+    const code = (req.params.code || req.query.code || '').toUpperCase();
+    if (!code) return res.status(400).json({ success: false, message: 'Código de campaña requerido' });
+
+    const p = await getPool();
+    const [rows] = await p.query(
+      'SELECT id, code, name, description, gm_name, created_at FROM campaigns WHERE code = ?',
+      [code]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Campaña no encontrada' });
+    }
+
+    const campaign = rows[0];
+
+    // Obtener los héroes vinculados a esta campaña
+    const [party] = await p.query(
+      'SELECT id, name, player_name, kin, profession, hp_current, hp_max, wp_current, wp_max, conditions, is_npc, updated_at FROM characters WHERE campaign_code = ? ORDER BY is_npc ASC, updated_at DESC',
+      [campaign.code]
+    );
+
+    const formattedParty = party.map(c => {
+      let cond = {};
+      if (typeof c.conditions === 'string') {
+        try { cond = JSON.parse(c.conditions); } catch (e) { cond = {}; }
+      } else if (typeof c.conditions === 'object' && c.conditions !== null) {
+        cond = c.conditions;
+      }
+      return { ...c, conditions: cond };
+    });
+
+    res.json({
+      success: true,
+      campaign,
+      party: formattedParty
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST Validar contraseña de Master para una campaña
+app.post(['/api/campaigns/:code/login-gm', '/api/campaigns-login.php'], async (req, res) => {
+  try {
+    const code = (req.params.code || req.body.code || '').toUpperCase();
+    const { gm_pass } = req.body;
+    if (!code || !gm_pass) {
+      return res.status(400).json({ success: false, message: 'Código y clave de master requeridos' });
+    }
+
+    const p = await getPool();
+    const [rows] = await p.query('SELECT gm_pass FROM campaigns WHERE code = ?', [code]);
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Campaña no encontrada' });
+    }
+
+    if (rows[0].gm_pass === gm_pass.trim()) {
+      res.json({ success: true, is_gm: true, message: 'Acceso concedido como Director de Juego' });
+    } else {
+      res.status(401).json({ success: false, message: 'Clave de Director de Juego incorrecta' });
+    }
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// -------------------------------------------------------------
+// ENDPOINTS PERSONAJES
+// -------------------------------------------------------------
+
+// GET Personajes (filtrado opcional por campaña o por ID)
 const getCharactersHandler = async (req, res) => {
   try {
     const p = await getPool();
     const id = req.params.id || req.query.id;
+    const campaign_code = req.query.campaign_code ? req.query.campaign_code.toUpperCase() : null;
+
     if (id) {
       const [rows] = await p.query('SELECT * FROM characters WHERE id = ?', [id]);
       if (rows.length === 0) {
@@ -157,9 +320,17 @@ const getCharactersHandler = async (req, res) => {
       }
       return res.json({ success: true, character: parseJsonFields(rows[0]) });
     }
-    const [rows] = await p.query(
-      'SELECT id, name, player_name, kin, profession, hp_current, hp_max, wp_current, wp_max, updated_at FROM characters ORDER BY updated_at DESC'
-    );
+
+    let sql = 'SELECT id, name, player_name, kin, profession, hp_current, hp_max, wp_current, wp_max, conditions, is_npc, campaign_code, player_token, updated_at FROM characters';
+    const params = [];
+
+    if (campaign_code) {
+      sql += ' WHERE campaign_code = ?';
+      params.push(campaign_code);
+    }
+    sql += ' ORDER BY is_npc ASC, updated_at DESC';
+
+    const [rows] = await p.query(sql, params);
     res.json({ success: true, characters: rows });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -184,8 +355,9 @@ const createCharacterHandler = async (req, res) => {
         conditions, skills, secondary_skills, heroic_abilities_and_spells,
         weapons, armor, helmet, inventory,
         gold, silver, copper,
-        memento, tiny_items, rests, death_saves
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        memento, tiny_items, rests, death_saves,
+        campaign_code, player_token, is_npc
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
     const values = [
@@ -223,7 +395,10 @@ const createCharacterHandler = async (req, res) => {
       data.memento || '',
       data.tiny_items || '',
       JSON.stringify(data.rests || {}),
-      JSON.stringify(data.death_saves || {})
+      JSON.stringify(data.death_saves || {}),
+      data.campaign_code ? data.campaign_code.toUpperCase() : null,
+      data.player_token || null,
+      data.is_npc ? 1 : 0
     ];
 
     const [result] = await p.query(sql, values);
@@ -253,7 +428,9 @@ const updateCharacterHandler = async (req, res) => {
         conditions = ?, skills = ?, secondary_skills = ?, heroic_abilities_and_spells = ?,
         weapons = ?, armor = ?, helmet = ?, inventory = ?,
         gold = ?, silver = ?, copper = ?,
-        memento = ?, tiny_items = ?, rests = ?, death_saves = ?
+        memento = ?, tiny_items = ?, rests = ?, death_saves = ?,
+        campaign_code = COALESCE(?, campaign_code),
+        is_npc = COALESCE(?, is_npc)
       WHERE id = ?
     `;
 
@@ -293,6 +470,8 @@ const updateCharacterHandler = async (req, res) => {
       data.tiny_items || '',
       JSON.stringify(data.rests || {}),
       JSON.stringify(data.death_saves || {}),
+      data.campaign_code ? data.campaign_code.toUpperCase() : null,
+      data.is_npc !== undefined ? (data.is_npc ? 1 : 0) : null,
       id
     ];
 
