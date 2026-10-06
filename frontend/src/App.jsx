@@ -2,16 +2,27 @@ import React, { useState, useEffect } from 'react';
 import CharacterSheet from './components/CharacterSheet';
 import CharacterCreator from './components/CharacterCreator';
 import CampaignModal from './components/CampaignModal';
+import CampaignGateway from './components/CampaignGateway';
 import PartyHUD from './components/PartyHUD';
 import { 
   Users, ShoppingBag, Tv, Plus, CheckCircle, AlertCircle, Sparkles, 
-  RefreshCw, Wand2, Crown, Shield, Link2, Copy, Check
+  RefreshCw, Wand2, Crown, Shield, Link2, Copy, Check, MapPin, ChevronDown,
+  LogOut, Compass
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
+const OFFICIAL_LOCATIONS = [
+  'Puerto Brumoso',
+  'El Valle de la Niebla',
+  'Ruinas de Oakhaven',
+  'Fortaleza de los Enanos',
+  'Campamento en el Bosque',
+  'Cueva del Dragon Rojo'
+];
+
 export default function App() {
-  const [view, setView] = useState('sheet'); // 'sheet', 'shops', 'projector'
+  const [view, setView] = useState('sheet'); // 'sheet', 'party', 'shops', 'projector'
   const [isCreating, setIsCreating] = useState(false);
   const [characters, setCharacters] = useState([]);
   const [selectedCharId, setSelectedCharId] = useState(null);
@@ -33,7 +44,12 @@ export default function App() {
   });
   const [party, setParty] = useState([]);
   const [isCampaignModalOpen, setIsCampaignModalOpen] = useState(false);
+  const [modalInitialTab, setModalInitialTab] = useState('join');
+  const [modalInitialIsGm, setModalInitialIsGm] = useState(false);
+  const [standaloneMode, setStandaloneMode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [isChangingLocation, setIsChangingLocation] = useState(false);
+  const [customLocation, setCustomLocation] = useState('');
 
   // Notificación flotante
   const showNotification = (msg) => {
@@ -65,8 +81,11 @@ export default function App() {
       if (campCode) {
         const campRes = await fetch(`${API_BASE}/campaigns.php?code=${campCode}`);
         const campData = await campRes.json();
-        if (campData.success && campData.party) {
-          setParty(campData.party);
+        if (campData.success) {
+          if (campData.party) setParty(campData.party);
+          if (campData.campaign && campData.campaign.active_location) {
+            setCampaign(prev => prev ? { ...prev, active_location: campData.campaign.active_location } : prev);
+          }
         }
       }
     } catch (err) {
@@ -117,7 +136,6 @@ export default function App() {
               is_gm: false
             });
             showNotification(`¡Te has unido a la campaña: ${data.campaign.name}!`);
-            // Limpiar query param de la URL sin recargar
             window.history.replaceState({}, document.title, window.location.pathname);
           }
         })
@@ -127,19 +145,22 @@ export default function App() {
     }
   }, []);
 
-  // Polling automático ligero para sincronizar Party HUD cada 12 segundos si hay campaña
+  // Polling automático para sincronizar Party HUD y Ubicación activa cada 10 segundos
   useEffect(() => {
     if (!campaign || !apiConnected) return;
     const interval = setInterval(() => {
       fetch(`${API_BASE}/campaigns.php?code=${campaign.code}`)
         .then(r => r.json())
         .then(data => {
-          if (data.success && data.party) {
-            setParty(data.party);
+          if (data.success) {
+            if (data.party) setParty(data.party);
+            if (data.campaign && data.campaign.active_location !== campaign.active_location) {
+              setCampaign(prev => prev ? { ...prev, active_location: data.campaign.active_location } : prev);
+            }
           }
         })
         .catch(() => {});
-    }, 12000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [campaign, apiConnected]);
 
@@ -150,6 +171,7 @@ export default function App() {
       localStorage.setItem('dragonbane_is_gm', newCamp.is_gm ? 'true' : 'false');
       setCampaign(newCamp);
       setIsGm(!!newCamp.is_gm);
+      setStandaloneMode(false);
       fetchCharacters(newCamp);
       showNotification(newCamp.is_gm 
         ? `¡Campaña "${newCamp.name}" activa como Director de Juego!` 
@@ -175,6 +197,31 @@ export default function App() {
     setCopiedLink(true);
     showNotification('¡Enlace de invitación copiado al portapapeles!');
     setTimeout(() => setCopiedLink(false), 2500);
+  };
+
+  // Cambiar ubicación activa de la mesa (Solo Master)
+  const handleUpdateLocation = async (newLocation) => {
+    if (!campaign || !isGm || !newLocation) return;
+    try {
+      const res = await fetch(`${API_BASE}/campaigns-settings.php`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: campaign.code,
+          active_location: newLocation
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const updatedCamp = { ...campaign, active_location: newLocation };
+        setCampaign(updatedCamp);
+        localStorage.setItem('dragonbane_campaign', JSON.stringify(updatedCamp));
+        setIsChangingLocation(false);
+        showNotification(`Ubicación actualizada: ${newLocation}`);
+      }
+    } catch (e) {
+      console.error('Error al actualizar ubicación:', e);
+    }
   };
 
   // Guardar personaje
@@ -236,23 +283,88 @@ export default function App() {
     );
   };
 
+  // PANTALLA INICIAL (LOBBY / GATEWAY) SI NO HAY CAMPAÑA SELECCIONADA Y NO ESTÁ EN MODO LIBRE
+  if (!campaign && !standaloneMode) {
+    return (
+      <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col justify-between">
+        <CampaignGateway
+          onOpenCreate={() => {
+            setModalInitialTab('create');
+            setModalInitialIsGm(true);
+            setIsCampaignModalOpen(true);
+          }}
+          onOpenGmLogin={() => {
+            setModalInitialTab('join');
+            setModalInitialIsGm(true);
+            setIsCampaignModalOpen(true);
+          }}
+          onJoinByCode={(code) => {
+            fetch(`${API_BASE}/campaigns.php?code=${code}`)
+              .then(r => r.json())
+              .then(data => {
+                if (data.success && data.campaign) {
+                  handleCampaignChange({
+                    ...data.campaign,
+                    is_gm: false
+                  });
+                } else {
+                  showNotification('No se encontró ninguna campaña con ese código.');
+                }
+              })
+              .catch(() => showNotification('Error conectando con el servidor.'));
+          }}
+          onEnterStandalone={() => setStandaloneMode(true)}
+        />
+
+        <CampaignModal
+          isOpen={isCampaignModalOpen}
+          onClose={() => setIsCampaignModalOpen(false)}
+          campaign={campaign}
+          isGm={isGm}
+          onCampaignChange={handleCampaignChange}
+          apiBase={API_BASE}
+          party={party}
+          initialTab={modalInitialTab}
+          initialIsGm={modalInitialIsGm}
+        />
+      </div>
+    );
+  }
+
+  const activeLocation = campaign?.active_location || 'Puerto Brumoso';
+
   return (
     <div className="min-h-screen bg-stone-950 text-stone-100 flex flex-col">
       {/* Barra de Navegación Principal */}
       <header className="bg-stone-900 border-b border-stone-800 sticky top-0 z-40 backdrop-blur-md bg-stone-900/90 shadow-md">
         <div className="max-w-7xl mx-auto px-4 py-2.5 flex flex-wrap items-center justify-between gap-3">
           
-          {/* Logo */}
+          {/* Logo y Campaña */}
           <div className="flex items-center space-x-3">
             <span className="text-2xl drop-shadow">🐉</span>
             <div>
-              <span className="font-black text-rose-600 text-lg tracking-wider block leading-none drop-shadow">DRAGONBANE</span>
-              <span className="text-[10px] text-stone-400 uppercase tracking-widest font-semibold">Companion Oficial de Campaña</span>
+              <div className="flex items-center space-x-2">
+                <span className="font-black text-rose-600 text-lg tracking-wider block leading-none drop-shadow">
+                  DRAGONBANE
+                </span>
+                {campaign && (
+                  <span className={`text-[10px] font-black uppercase px-2 py-0.5 rounded-md flex items-center space-x-1 ${
+                    isGm ? 'bg-amber-500 text-stone-950' : 'bg-sky-600/30 text-sky-300 border border-sky-500/40'
+                  }`}>
+                    {isGm ? <Crown className="w-2.5 h-2.5" /> : <Shield className="w-2.5 h-2.5" />}
+                    <span>{isGm ? 'Master' : 'Jugador'}</span>
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] text-stone-400 uppercase tracking-widest font-semibold block mt-0.5">
+                {campaign ? `Campaña: ${campaign.name}` : 'Modo Hoja Libre'}
+              </span>
             </div>
           </div>
 
-          {/* Menú de Módulos */}
+          {/* Menú de Módulos (DIFERENCIADO: Master vs Jugador) */}
           <nav className="flex items-center space-x-1 sm:space-x-2 bg-stone-950 p-1 rounded-xl border border-stone-800">
+            {/* Pestaña Hojas */}
             <button
               onClick={() => { setView('sheet'); setIsCreating(false); }}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -260,8 +372,10 @@ export default function App() {
               }`}
             >
               <Users className="w-3.5 h-3.5" />
-              <span>Hojas de Héroes</span>
+              <span>{isGm ? 'Hojas del Grupo' : 'Mi Héroe'}</span>
             </button>
+
+            {/* Pestaña Crear (o nuevo héroe) */}
             <button
               onClick={() => { setView('sheet'); setIsCreating(true); }}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -269,8 +383,10 @@ export default function App() {
               }`}
             >
               <Wand2 className="w-3.5 h-3.5" />
-              <span>Creador</span>
+              <span>{isGm ? 'Creador PJ/NPC' : 'Crear Héroe'}</span>
             </button>
+
+            {/* Pestaña Ubicación / Mercados (habilitado según Master) */}
             <button
               onClick={() => setView('shops')}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -278,64 +394,113 @@ export default function App() {
               }`}
             >
               <ShoppingBag className="w-3.5 h-3.5" />
-              <span>Mercados</span>
+              <span>{isGm ? 'Mercados' : `Explorar: ${activeLocation}`}</span>
             </button>
-            <button
-              onClick={() => setView('projector')}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                view === 'projector' ? 'bg-amber-600 text-stone-950 shadow-md font-bold' : 'text-stone-300 hover:text-white'
-              }`}
-            >
-              <Tv className="w-3.5 h-3.5" />
-              <span>Visor TV</span>
-            </button>
+
+            {/* Visor TV: SOLO VISIBLE PARA EL MASTER */}
+            {isGm && (
+              <button
+                onClick={() => setView('projector')}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  view === 'projector' ? 'bg-amber-600 text-stone-950 shadow-md font-bold' : 'text-stone-300 hover:text-white'
+                }`}
+              >
+                <Tv className="w-3.5 h-3.5" />
+                <span>Visor TV</span>
+              </button>
+            )}
           </nav>
 
-          {/* Sección de Campaña y Estado de Red */}
+          {/* Selector de Ubicación y Enlaces */}
           <div className="flex items-center space-x-2 text-xs">
-            {campaign ? (
-              <div className="flex items-center space-x-1.5 bg-stone-950 border border-amber-600/50 rounded-xl p-1 pr-2 shadow-sm">
-                <button
-                  onClick={() => setIsCampaignModalOpen(true)}
-                  className="flex items-center space-x-1.5 px-2 py-1 rounded-lg hover:bg-stone-900 transition-colors"
-                  title="Configurar campaña"
-                >
-                  {isGm ? (
-                    <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                  ) : (
-                    <Shield className="w-3.5 h-3.5 text-stone-400 shrink-0" />
-                  )}
-                  <span className="font-bold text-amber-200 max-w-[120px] sm:max-w-[160px] truncate">
-                    {campaign.name}
-                  </span>
-                </button>
+            
+            {/* UBICACIÓN ACTIVA (Controlable por el Master, informativa para jugadores) */}
+            {campaign && (
+              <div className="relative">
+                {isGm ? (
+                  <button
+                    onClick={() => setIsChangingLocation(!isChangingLocation)}
+                    className="flex items-center space-x-1.5 bg-stone-950 hover:bg-stone-850 border border-amber-600/40 text-amber-300 px-2.5 py-1.5 rounded-xl font-bold transition-all shadow-sm"
+                    title="Cambiar ubicación activa de la mesa"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span className="max-w-[110px] sm:max-w-[140px] truncate">{activeLocation}</span>
+                    <ChevronDown className="w-3 h-3 text-stone-400" />
+                  </button>
+                ) : (
+                  <div className="flex items-center space-x-1.5 bg-stone-950 border border-stone-800 text-stone-300 px-2.5 py-1.5 rounded-xl">
+                    <MapPin className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span className="text-[11px]">Ubicación:</span>
+                    <span className="font-bold text-amber-200 max-w-[100px] truncate">{activeLocation}</span>
+                  </div>
+                )}
 
-                {/* Botón rápido para copiar invitación */}
-                <button
-                  onClick={handleQuickCopyLink}
-                  className="p-1 rounded-md text-amber-400 hover:text-amber-300 hover:bg-amber-950/60 transition-colors"
-                  title="Copiar enlace de invitación"
-                >
-                  {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Link2 className="w-3.5 h-3.5" />}
-                </button>
+                {/* Dropdown de cambio de ubicación (Solo Master) */}
+                {isGm && isChangingLocation && (
+                  <div className="absolute right-0 mt-2 w-56 bg-stone-900 border border-stone-700 rounded-xl shadow-2xl z-50 p-2 space-y-1 animate-in fade-in">
+                    <div className="text-[10px] uppercase font-bold text-stone-400 px-2 py-1">
+                      Ubicación del Grupo:
+                    </div>
+                    {OFFICIAL_LOCATIONS.map((loc) => (
+                      <button
+                        key={loc}
+                        onClick={() => handleUpdateLocation(loc)}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                          activeLocation === loc 
+                            ? 'bg-amber-600 text-stone-950 font-bold' 
+                            : 'text-stone-300 hover:bg-stone-800'
+                        }`}
+                      >
+                        {loc}
+                      </button>
+                    ))}
+                    <div className="pt-1 border-t border-stone-800 flex items-center space-x-1">
+                      <input
+                        type="text"
+                        placeholder="Otra ubicación..."
+                        value={customLocation}
+                        onChange={(e) => setCustomLocation(e.target.value)}
+                        className="w-full bg-stone-950 border border-stone-800 rounded px-2 py-1 text-xs text-stone-200 focus:outline-none"
+                      />
+                      <button
+                        onClick={() => {
+                          if (customLocation.trim()) handleUpdateLocation(customLocation.trim());
+                        }}
+                        className="bg-amber-600 text-stone-950 px-2 py-1 rounded text-xs font-bold"
+                      >
+                        OK
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            ) : (
+            )}
+
+            {/* Botón rápido para invitar / copiar link */}
+            {campaign && (
               <button
-                onClick={() => setIsCampaignModalOpen(true)}
-                className="flex items-center space-x-1.5 bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border border-amber-700/60 px-2.5 py-1.5 rounded-xl font-bold transition-all shadow-sm"
+                onClick={handleQuickCopyLink}
+                className="flex items-center space-x-1 p-2 bg-stone-950 border border-stone-800 hover:border-amber-500 text-amber-400 rounded-xl transition-all"
+                title="Copiar enlace de invitación"
               >
-                <span>⚔️</span>
-                <span>Campañas / Mesas</span>
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Link2 className="w-3.5 h-3.5" />}
               </button>
             )}
 
+            {/* Botón Administrar Campaña / Salir */}
+            <button
+              onClick={() => setIsCampaignModalOpen(true)}
+              className="p-2 bg-stone-950 border border-stone-800 hover:border-stone-700 text-stone-400 hover:text-white rounded-xl transition-all"
+              title="Ajustes de campaña"
+            >
+              <Users className="w-3.5 h-3.5" />
+            </button>
+
             {/* Indicador MySQL */}
             <div 
-              className="flex items-center space-x-1.5 pl-1"
-              title={apiConnected ? 'Conectado a MySQL en Hostinger' : 'Modo Offline / LocalStorage'}
-            >
-              <div className={`w-2.5 h-2.5 rounded-full ${apiConnected ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-            </div>
+              className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse ml-1"
+              title={apiConnected ? 'Conectado a MySQL en Hostinger' : 'Modo Offline'}
+            />
           </div>
 
         </div>
@@ -358,6 +523,8 @@ export default function App() {
         onCampaignChange={handleCampaignChange}
         apiBase={API_BASE}
         party={party}
+        initialTab={modalInitialTab}
+        initialIsGm={modalInitialIsGm}
       />
 
       {/* Contenido Principal */}
@@ -365,7 +532,33 @@ export default function App() {
         {view === 'sheet' && (
           <div className="max-w-7xl mx-auto px-4">
             
-            {/* Si estamos en una campaña, mostrar el Party HUD en vivo */}
+            {/* Banner Informativo si es Jugador */}
+            {campaign && !isGm && (
+              <div className="mb-4 bg-gradient-to-r from-stone-900 to-stone-950 border border-sky-600/30 p-3.5 rounded-2xl flex items-center justify-between shadow-md">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
+                    <Compass className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-xs font-bold text-sky-200">
+                      Campaña: {campaign.name} · Master: {campaign.gm_name}
+                    </div>
+                    <div className="text-[11px] text-stone-400">
+                      Ubicación del grupo: <strong className="text-amber-300">{activeLocation}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div className="text-xs text-stone-400">
+                  {characters.length === 0 ? (
+                    <span className="text-amber-400 font-bold">¡Crea tu personaje abajo para unirte a la mesa!</span>
+                  ) : (
+                    <span>{characters.length} héroe(s) registrado(s)</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Party HUD en vivo para toda la campaña */}
             {campaign && party.length > 0 && !isCreating && (
               <PartyHUD
                 party={party}
@@ -382,30 +575,31 @@ export default function App() {
               />
             ) : (
               <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                {/* Lista lateral de héroes */}
+                {/* Lista lateral de héroes (ESTRICTAMENTE AISLADA A ESTA CAMPAÑA) */}
                 <div className="lg:col-span-1 space-y-3">
                   <div className="flex items-center justify-between">
                     <h2 className="text-xs font-bold text-stone-400 uppercase tracking-wider">
-                      {campaign ? `Héroes en la Campaña (${characters.length})` : 'Héroes del Grupo'}
+                      {campaign ? `Héroes de ${campaign.name} (${characters.length})` : 'Héroes Registrados'}
                     </h2>
                     <button
                       onClick={() => setIsCreating(true)}
                       className="flex items-center space-x-1 text-xs text-amber-400 hover:text-amber-300 font-bold bg-stone-900 hover:bg-stone-800 border border-stone-800 px-2 py-1 rounded-lg transition-colors"
                     >
                       <Plus className="w-3.5 h-3.5" />
-                      <span>Nuevo</span>
+                      <span>{isGm ? 'Nuevo PJ/NPC' : 'Crear Héroe'}</span>
                     </button>
                   </div>
 
                   <div className="space-y-1.5">
                     {characters.length === 0 ? (
-                      <div className="p-4 bg-stone-900/50 border border-stone-800/80 rounded-xl text-center text-xs text-stone-500 space-y-2">
-                        <p>No hay héroes en esta lista todavía.</p>
+                      <div className="p-5 bg-stone-900/50 border border-stone-800/80 rounded-2xl text-center text-xs text-stone-400 space-y-3">
+                        <p>No tienes ningún personaje creado para esta campaña todavía.</p>
                         <button
                           onClick={() => setIsCreating(true)}
-                          className="bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold px-3 py-1.5 rounded-lg text-xs"
+                          className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-2 rounded-xl text-xs shadow-md transition-colors flex items-center justify-center space-x-1.5"
                         >
-                          Crear el primer héroe
+                          <Wand2 className="w-3.5 h-3.5" />
+                          <span>Crear mi Personaje</span>
                         </button>
                       </div>
                     ) : (
@@ -449,25 +643,44 @@ export default function App() {
         )}
 
         {view === 'shops' && (
-          <div className="max-w-4xl mx-auto p-4 sm:p-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
-              <ShoppingBag className="w-8 h-8" />
+          <div className="max-w-4xl mx-auto p-4 sm:p-8 space-y-6">
+            <div className="text-center space-y-3">
+              <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-xl">
+                <ShoppingBag className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-black text-amber-100">
+                Mercados y Tiendas: <span className="text-rose-400">{activeLocation}</span>
+              </h2>
+              <p className="text-sm text-stone-400 max-w-lg mx-auto">
+                {isGm 
+                  ? 'Como Director de Juego, aquí podrás crear las tiendas del asentamiento actual y habilitar cuáles pueden ver los jugadores.'
+                  : `Estás explorando los puestos comerciales y servicios disponibles en ${activeLocation}.`
+                }
+              </p>
             </div>
-            <h2 className="text-xl font-bold text-amber-100">Mercados y Tiendas de la Región</h2>
-            <p className="text-sm text-stone-400 max-w-md mx-auto">
-              Aquí podrás crear asentamientos con sus tiendas e inventarios (con precios oficiales de armas, armaduras, raciones y monturas extraídos directamente del capítulo 6 del manual de reglas).
-            </p>
+
+            <div className="p-6 bg-stone-900/80 border border-stone-800 rounded-2xl text-center text-xs text-stone-400 space-y-2">
+              <p className="font-semibold text-stone-300">
+                📍 Asentamiento Activo: <strong className="text-amber-300">{activeLocation}</strong>
+              </p>
+              <p>
+                {isGm 
+                  ? 'Listo para precargar el catálogo oficial de armas, armaduras y equipo del Capítulo 6 para esta ubicación.'
+                  : 'Tu Director de Juego aún está preparando el inventario de esta zona.'
+                }
+              </p>
+            </div>
           </div>
         )}
 
-        {view === 'projector' && (
+        {view === 'projector' && isGm && (
           <div className="max-w-4xl mx-auto p-4 sm:p-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-sky-600/20 border border-sky-500/30 flex items-center justify-center text-sky-400">
+            <div className="w-16 h-16 mx-auto rounded-2xl bg-sky-600/20 border border-sky-500/30 flex items-center justify-center text-sky-400 shadow-xl">
               <Tv className="w-8 h-8" />
             </div>
-            <h2 className="text-xl font-bold text-sky-100">Visor TV / Pantalla Compartida</h2>
+            <h2 className="text-2xl font-black text-sky-100">Visor TV / Pantalla Compartida</h2>
             <p className="text-sm text-stone-400 max-w-md mx-auto">
-              Abre esta pantalla en tu Smart TV. En tu panel de director podrás hacer clic en "Mostrar NPC" o "Mostrar Mapa" para que aparezca aquí inmediatamente en tamaño completo.
+              Abre esta pantalla en tu Smart TV o segunda pantalla. Desde tu panel de director podrás hacer clic en "Mostrar NPC" o "Mostrar Mapa" para que aparezca aquí inmediatamente en tamaño completo.
             </p>
           </div>
         )}

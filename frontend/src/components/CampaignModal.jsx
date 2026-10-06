@@ -10,19 +10,29 @@ export default function CampaignModal({
   isGm, 
   onCampaignChange, 
   apiBase,
-  party = [] 
+  party = [],
+  initialTab = 'join',
+  initialIsGm = false
 }) {
-  const [tab, setTab] = useState(campaign ? 'info' : 'join'); // 'info', 'create', 'join'
+  const [tab, setTab] = useState(campaign ? 'info' : initialTab); // 'info', 'create', 'join'
   const [name, setName] = useState('');
   const [gmName, setGmName] = useState('');
   const [description, setDescription] = useState('');
   const [gmPass, setGmPass] = useState('');
   const [joinCode, setJoinCode] = useState('');
-  const [isGmCheck, setIsGmCheck] = useState(false);
+  const [isGmCheck, setIsGmCheck] = useState(initialIsGm);
   const [joinGmPass, setJoinGmPass] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+
+  React.useEffect(() => {
+    if (isOpen) {
+      setTab(campaign ? 'info' : initialTab);
+      setIsGmCheck(initialIsGm);
+      setError(null);
+    }
+  }, [isOpen, campaign, initialTab, initialIsGm]);
 
   if (!isOpen) return null;
 

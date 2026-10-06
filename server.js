@@ -139,6 +139,8 @@ async function initDatabase() {
       }
     };
 
+    await checkAndAddColumn('campaigns', 'active_location', "VARCHAR(100) DEFAULT 'Puerto Brumoso'");
+    await checkAndAddColumn('campaigns', 'unlocked_features', 'JSON NULL');
     await checkAndAddColumn('characters', 'weakness', 'VARCHAR(255) DEFAULT ""');
     await checkAndAddColumn('characters', 'secondary_skills', 'JSON');
     await checkAndAddColumn('characters', 'heroic_abilities_and_spells', 'TEXT');
@@ -242,7 +244,7 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 
     const p = await getPool();
     const [rows] = await p.query(
-      'SELECT id, code, name, description, gm_name, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
+      'SELECT id, code, name, description, gm_name, active_location, unlocked_features, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
       [code, code, code]
     );
     if (rows.length === 0) {
@@ -250,8 +252,13 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
     }
 
     const campaign = rows[0];
+    if (typeof campaign.unlocked_features === 'string') {
+      try { campaign.unlocked_features = JSON.parse(campaign.unlocked_features); } catch(e) { campaign.unlocked_features = {}; }
+    } else if (!campaign.unlocked_features) {
+      campaign.unlocked_features = { shops: false, map: true, tv: false };
+    }
 
-    // Obtener los héroes vinculados a esta campaña
+    // Obtener SOLO los héroes vinculados a esta campaña
     const [party] = await p.query(
       'SELECT id, name, player_name, kin, profession, hp_current, hp_max, wp_current, wp_max, conditions, is_npc, updated_at FROM characters WHERE campaign_code = ? ORDER BY is_npc ASC, updated_at DESC',
       [campaign.code]
@@ -272,6 +279,46 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
       campaign,
       party: formattedParty
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST Modificar Ajustes de Campaña (Ubicación activa y Secciones habilitadas por el Master)
+app.post(['/api/campaigns/:code/settings', '/api/campaigns-settings.php'], async (req, res) => {
+  try {
+    const code = (req.params.code || req.body.code || '').toUpperCase();
+    const { active_location, unlocked_features, gm_pass } = req.body;
+    const p = await getPool();
+
+    const [rows] = await p.query(
+      'SELECT code, gm_pass FROM campaigns WHERE code = ? OR UPPER(name) = ?',
+      [code, code]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Campaña no encontrada' });
+    }
+
+    const campaignCode = rows[0].code;
+
+    const updates = [];
+    const params = [];
+
+    if (active_location !== undefined) {
+      updates.push('active_location = ?');
+      params.push(active_location);
+    }
+    if (unlocked_features !== undefined) {
+      updates.push('unlocked_features = ?');
+      params.push(typeof unlocked_features === 'object' ? JSON.stringify(unlocked_features) : unlocked_features);
+    }
+
+    if (updates.length > 0) {
+      params.push(campaignCode);
+      await p.query(`UPDATE campaigns SET ${updates.join(', ')} WHERE code = ?`, params);
+    }
+
+    res.json({ success: true, message: 'Ajustes de campaña actualizados correctamente' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
@@ -309,7 +356,7 @@ app.post(['/api/campaigns/:code/login-gm', '/api/campaigns-login.php'], async (r
 // ENDPOINTS PERSONAJES
 // -------------------------------------------------------------
 
-// GET Personajes (filtrado opcional por campaña o por ID)
+// GET Personajes (filtrado estricto por campaña o personajes locales sin campaña)
 const getCharactersHandler = async (req, res) => {
   try {
     const p = await getPool();
@@ -330,6 +377,9 @@ const getCharactersHandler = async (req, res) => {
     if (campaign_code) {
       sql += ' WHERE campaign_code = ?';
       params.push(campaign_code);
+    } else {
+      // Si no se especifica campaña, SOLO devolver personajes que no pertenezcan a ninguna campaña
+      sql += ' WHERE campaign_code IS NULL OR campaign_code = ""';
     }
     sql += ' ORDER BY is_npc ASC, updated_at DESC';
 
