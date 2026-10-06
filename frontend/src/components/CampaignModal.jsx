@@ -292,18 +292,18 @@ export default function CampaignModal({
             <form onSubmit={handleJoinCampaign} className="space-y-4">
               <div>
                 <label className="block text-xs font-bold text-stone-300 uppercase tracking-wider mb-1.5">
-                  Código de la Campaña:
+                  Código o Nombre de la Campaña:
                 </label>
                 <input
                   type="text"
-                  placeholder="Ej: DRAGON-4X9K"
+                  placeholder="Ej: VESTIG-FZ30 o Vestigios"
                   value={joinCode}
                   onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
                   className="w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-xl px-3 py-2.5 text-sm font-mono tracking-wider text-amber-200 placeholder:text-stone-600 focus:outline-none uppercase"
                   required
                 />
                 <p className="text-[11px] text-stone-500 mt-1">
-                  Pídele este código a tu Director de Juego (o usa el enlace que te envió).
+                  Escribe el código (ej: VESTIG-FZ30) o el nombre de tu campaña (ej: Vestigios).
                 </p>
               </div>
 

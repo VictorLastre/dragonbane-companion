@@ -242,8 +242,8 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 
     const p = await getPool();
     const [rows] = await p.query(
-      'SELECT id, code, name, description, gm_name, created_at FROM campaigns WHERE code = ?',
-      [code]
+      'SELECT id, code, name, description, gm_name, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
+      [code, code, code]
     );
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Campaña no encontrada' });
@@ -287,13 +287,16 @@ app.post(['/api/campaigns/:code/login-gm', '/api/campaigns-login.php'], async (r
     }
 
     const p = await getPool();
-    const [rows] = await p.query('SELECT gm_pass FROM campaigns WHERE code = ?', [code]);
+    const [rows] = await p.query(
+      'SELECT code, gm_pass FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
+      [code, code, code]
+    );
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Campaña no encontrada' });
     }
 
     if (rows[0].gm_pass === gm_pass.trim()) {
-      res.json({ success: true, is_gm: true, message: 'Acceso concedido como Director de Juego' });
+      res.json({ success: true, is_gm: true, code: rows[0].code, message: 'Acceso concedido como Director de Juego' });
     } else {
       res.status(401).json({ success: false, message: 'Clave de Director de Juego incorrecta' });
     }
