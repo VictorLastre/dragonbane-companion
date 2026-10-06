@@ -4,6 +4,7 @@ import CharacterCreator from './components/CharacterCreator';
 import CampaignModal from './components/CampaignModal';
 import CampaignGateway from './components/CampaignGateway';
 import PartyHUD from './components/PartyHUD';
+import SettlementView from './components/SettlementView';
 import { 
   Users, ShoppingBag, Tv, Plus, CheckCircle, AlertCircle, Sparkles, 
   RefreshCw, Wand2, Crown, Shield, Link2, Copy, Check, MapPin, ChevronDown,
@@ -643,34 +644,16 @@ export default function App() {
         )}
 
         {view === 'shops' && (
-          <div className="max-w-4xl mx-auto p-4 sm:p-8 space-y-6">
-            <div className="text-center space-y-3">
-              <div className="w-16 h-16 mx-auto rounded-2xl bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400 shadow-xl">
-                <ShoppingBag className="w-8 h-8" />
-              </div>
-              <h2 className="text-2xl font-black text-amber-100">
-                Mercados y Tiendas: <span className="text-rose-400">{activeLocation}</span>
-              </h2>
-              <p className="text-sm text-stone-400 max-w-lg mx-auto">
-                {isGm 
-                  ? 'Como Director de Juego, aquí podrás crear las tiendas del asentamiento actual y habilitar cuáles pueden ver los jugadores.'
-                  : `Estás explorando los puestos comerciales y servicios disponibles en ${activeLocation}.`
-                }
-              </p>
-            </div>
-
-            <div className="p-6 bg-stone-900/80 border border-stone-800 rounded-2xl text-center text-xs text-stone-400 space-y-2">
-              <p className="font-semibold text-stone-300">
-                📍 Asentamiento Activo: <strong className="text-amber-300">{activeLocation}</strong>
-              </p>
-              <p>
-                {isGm 
-                  ? 'Listo para precargar el catálogo oficial de armas, armaduras y equipo del Capítulo 6 para esta ubicación.'
-                  : 'Tu Director de Juego aún está preparando el inventario de esta zona.'
-                }
-              </p>
-            </div>
-          </div>
+          <SettlementView
+            location={activeLocation}
+            campaign={campaign}
+            isGm={isGm}
+            party={characters}
+            activeChar={activeChar}
+            onUpdateCharacter={handleSaveCharacter}
+            apiBase={API_BASE}
+            showNotification={showNotification}
+          />
         )}
 
         {view === 'projector' && isGm && (

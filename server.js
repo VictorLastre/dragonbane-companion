@@ -151,8 +151,13 @@ async function initDatabase() {
     await checkAndAddColumn('characters', 'player_token', 'VARCHAR(64) NULL');
     await checkAndAddColumn('characters', 'is_npc', 'TINYINT(1) DEFAULT 0');
     await checkAndAddColumn('screen_broadcast', 'campaign_code', 'VARCHAR(32) NULL');
+    await checkAndAddColumn('shops', 'campaign_code', 'VARCHAR(32) NULL');
+    await checkAndAddColumn('shops', 'is_unlocked', 'TINYINT(1) DEFAULT 1');
+    await checkAndAddColumn('shops', 'scale', "VARCHAR(50) DEFAULT 'lugar_de_paso'");
+    await checkAndAddColumn('shops', 'environment', "VARCHAR(50) DEFAULT 'costero'");
+    await checkAndAddColumn('shops', 'keeper_name', "VARCHAR(100) DEFAULT ''");
 
-    console.log('✓ Base de datos, campañas y tablas de Dragonbane listas');
+    console.log('✓ Base de datos, campañas, tiendas y tablas de Dragonbane listas');
   } catch (err) {
     console.error('Aviso de conexión MySQL:', err.message);
   }
@@ -555,16 +560,181 @@ const deleteCharacterHandler = async (req, res) => {
 app.delete('/api/characters/:id', deleteCharacterHandler);
 app.delete('/api/characters.php', deleteCharacterHandler);
 
-// Tiendas y Mercados
+// -------------------------------------------------------------
+// TIENDAS, MERCADOS Y GENERADOR DE ASENTAMIENTOS
+// -------------------------------------------------------------
+
+// GET Tiendas de la campaña y ubicación actual
 app.get(['/api/shops', '/api/shops.php'], async (req, res) => {
   try {
     const p = await getPool();
-    const [rows] = await p.query('SELECT * FROM shops ORDER BY location ASC, name ASC');
+    const location = req.query.location ? req.query.location.trim() : null;
+    const campaign_code = req.query.campaign_code ? req.query.campaign_code.toUpperCase().trim() : null;
+    const is_gm = req.query.is_gm === 'true' || req.query.is_gm === '1';
+
+    let sql = 'SELECT * FROM shops';
+    const conditions = [];
+    const params = [];
+
+    if (campaign_code) {
+      conditions.push('(campaign_code = ? OR campaign_code IS NULL OR campaign_code = "")');
+      params.push(campaign_code);
+    }
+    if (location) {
+      conditions.push('location = ?');
+      params.push(location);
+    }
+    if (!is_gm) {
+      conditions.push('is_unlocked = 1');
+    }
+
+    if (conditions.length > 0) {
+      sql += ' WHERE ' + conditions.join(' AND ');
+    }
+    sql += ' ORDER BY id ASC';
+
+    const [rows] = await p.query(sql, params);
     const shops = rows.map(s => ({
       ...s,
+      is_unlocked: s.is_unlocked !== 0,
       items: typeof s.items === 'string' ? JSON.parse(s.items) : (s.items || [])
     }));
     res.json({ success: true, shops });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST Guardar lote de tiendas generadas para un asentamiento (Generador Procedural)
+app.post(['/api/shops/batch', '/api/shops-batch.php'], async (req, res) => {
+  try {
+    const { campaign_code, location, shops } = req.body;
+    if (!location || !Array.isArray(shops)) {
+      return res.status(400).json({ success: false, message: 'Ubicación y lista de tiendas requeridas' });
+    }
+
+    const p = await getPool();
+    const campCode = campaign_code ? campaign_code.toUpperCase().trim() : null;
+
+    // Eliminar tiendas previas de esta ubicación para esta campaña
+    if (campCode) {
+      await p.query('DELETE FROM shops WHERE location = ? AND campaign_code = ?', [location.trim(), campCode]);
+    } else {
+      await p.query('DELETE FROM shops WHERE location = ? AND (campaign_code IS NULL OR campaign_code = "")', [location.trim()]);
+    }
+
+    // Insertar nuevas tiendas
+    for (const shop of shops) {
+      await p.query(
+        'INSERT INTO shops (campaign_code, location, name, shop_type, keeper_name, description, scale, environment, is_unlocked, items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+          campCode,
+          location.trim(),
+          shop.name || 'Puesto Comercial',
+          shop.shop_type || 'General',
+          shop.keeper_name || '',
+          shop.description || '',
+          shop.scale || 'lugar_de_paso',
+          shop.environment || 'costero',
+          shop.is_unlocked !== false ? 1 : 0,
+          JSON.stringify(shop.items || [])
+        ]
+      );
+    }
+
+    res.json({ success: true, message: `Asentamiento "${location}" generado con ${shops.length} tiendas.` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// POST Crear o actualizar tienda individual
+app.post(['/api/shops', '/api/shops.php'], async (req, res) => {
+  try {
+    const data = req.body;
+    if (!data.name || !data.location) {
+      return res.status(400).json({ success: false, message: 'Nombre y ubicación obligatorios' });
+    }
+
+    const p = await getPool();
+    const campCode = data.campaign_code ? data.campaign_code.toUpperCase().trim() : null;
+
+    const [result] = await p.query(
+      'INSERT INTO shops (campaign_code, location, name, shop_type, keeper_name, description, scale, environment, is_unlocked, items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      [
+        campCode,
+        data.location.trim(),
+        data.name.trim(),
+        data.shop_type || 'General',
+        data.keeper_name || '',
+        data.description || '',
+        data.scale || 'lugar_de_paso',
+        data.environment || 'costero',
+        data.is_unlocked !== false ? 1 : 0,
+        JSON.stringify(data.items || [])
+      ]
+    );
+
+    res.status(201).json({ success: true, id: result.insertId, message: 'Tienda creada con éxito' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// PUT Alternar visibilidad de una tienda para los jugadores
+app.put(['/api/shops/:id/toggle', '/api/shops-toggle.php'], async (req, res) => {
+  try {
+    const id = req.params.id || req.body.id;
+    if (!id) return res.status(400).json({ success: false, message: 'ID de tienda requerido' });
+
+    const p = await getPool();
+    let newUnlocked;
+
+    if (req.body.is_unlocked !== undefined) {
+      newUnlocked = req.body.is_unlocked ? 1 : 0;
+      await p.query('UPDATE shops SET is_unlocked = ? WHERE id = ?', [newUnlocked, id]);
+    } else {
+      await p.query('UPDATE shops SET is_unlocked = NOT is_unlocked WHERE id = ?', [id]);
+      const [rows] = await p.query('SELECT is_unlocked FROM shops WHERE id = ?', [id]);
+      newUnlocked = rows[0]?.is_unlocked;
+    }
+
+    res.json({ success: true, is_unlocked: newUnlocked === 1, message: 'Visibilidad de la tienda actualizada' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE Borrar todas las tiendas de una ubicación
+app.post(['/api/shops/clear', '/api/shops-clear.php'], async (req, res) => {
+  try {
+    const { location, campaign_code } = req.body;
+    if (!location) return res.status(400).json({ success: false, message: 'Ubicación requerida' });
+
+    const p = await getPool();
+    const campCode = campaign_code ? campaign_code.toUpperCase().trim() : null;
+
+    if (campCode) {
+      await p.query('DELETE FROM shops WHERE location = ? AND campaign_code = ?', [location.trim(), campCode]);
+    } else {
+      await p.query('DELETE FROM shops WHERE location = ?', [location.trim()]);
+    }
+
+    res.json({ success: true, message: `Tiendas de "${location}" eliminadas` });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// DELETE Borrar tienda individual
+app.delete(['/api/shops/:id', '/api/shops.php'], async (req, res) => {
+  try {
+    const id = req.params.id || req.query.id;
+    if (!id) return res.status(400).json({ success: false, message: 'ID de tienda requerido' });
+
+    const p = await getPool();
+    await p.query('DELETE FROM shops WHERE id = ?', [id]);
+    res.json({ success: true, message: 'Tienda eliminada' });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
