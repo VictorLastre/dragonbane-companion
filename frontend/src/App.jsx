@@ -5,10 +5,11 @@ import CampaignModal from './components/CampaignModal';
 import CampaignGateway from './components/CampaignGateway';
 import PartyHUD from './components/PartyHUD';
 import SettlementView from './components/SettlementView';
+import TravelView from './components/TravelView';
 import { 
   Users, ShoppingBag, Tv, Plus, CheckCircle, AlertCircle, Sparkles, 
   RefreshCw, Wand2, Crown, Shield, Link2, Copy, Check, MapPin, ChevronDown,
-  LogOut, Compass
+  LogOut, Compass, Footprints
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -389,13 +390,24 @@ export default function App() {
 
             {/* Pestaña Ubicación / Mercados (habilitado según Master) */}
             <button
-              onClick={() => setView('shops')}
+              onClick={() => { setView('shops'); setIsCreating(false); }}
               className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
                 view === 'shops' ? 'bg-amber-600 text-stone-950 shadow-md font-bold' : 'text-stone-300 hover:text-white'
               }`}
             >
               <ShoppingBag className="w-3.5 h-3.5" />
               <span>{isGm ? 'Mercados' : `Explorar: ${activeLocation}`}</span>
+            </button>
+
+            {/* Pestaña Viaje y Campamento (Capítulo 8) */}
+            <button
+              onClick={() => { setView('travel'); setIsCreating(false); }}
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                view === 'travel' ? 'bg-emerald-600 text-white shadow-md font-bold' : 'text-stone-300 hover:text-white'
+              }`}
+            >
+              <Footprints className="w-3.5 h-3.5" />
+              <span>Viajes y Campamento</span>
             </button>
 
             {/* Visor TV: SOLO VISIBLE PARA EL MASTER */}
@@ -650,6 +662,17 @@ export default function App() {
             isGm={isGm}
             party={characters}
             activeChar={activeChar}
+            onUpdateCharacter={handleSaveCharacter}
+            apiBase={API_BASE}
+            showNotification={showNotification}
+          />
+        )}
+
+        {view === 'travel' && (
+          <TravelView
+            campaign={campaign}
+            isGm={isGm}
+            party={characters}
             onUpdateCharacter={handleSaveCharacter}
             apiBase={API_BASE}
             showNotification={showNotification}

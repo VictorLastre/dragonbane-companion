@@ -141,6 +141,7 @@ async function initDatabase() {
 
     await checkAndAddColumn('campaigns', 'active_location', "VARCHAR(100) DEFAULT 'Puerto Brumoso'");
     await checkAndAddColumn('campaigns', 'unlocked_features', 'JSON NULL');
+    await checkAndAddColumn('campaigns', 'travel_state', 'JSON NULL');
     await checkAndAddColumn('characters', 'weakness', 'VARCHAR(255) DEFAULT ""');
     await checkAndAddColumn('characters', 'secondary_skills', 'JSON');
     await checkAndAddColumn('characters', 'heroic_abilities_and_spells', 'TEXT');
@@ -249,7 +250,7 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 
     const p = await getPool();
     const [rows] = await p.query(
-      'SELECT id, code, name, description, gm_name, active_location, unlocked_features, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
+      'SELECT id, code, name, description, gm_name, active_location, unlocked_features, travel_state, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
       [code, code, code]
     );
     if (rows.length === 0) {
@@ -261,6 +262,10 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
       try { campaign.unlocked_features = JSON.parse(campaign.unlocked_features); } catch(e) { campaign.unlocked_features = {}; }
     } else if (!campaign.unlocked_features) {
       campaign.unlocked_features = { shops: false, map: true, tv: false };
+    }
+
+    if (typeof campaign.travel_state === 'string') {
+      try { campaign.travel_state = JSON.parse(campaign.travel_state); } catch(e) { campaign.travel_state = null; }
     }
 
     // Obtener SOLO los héroes vinculados a esta campaña
@@ -289,11 +294,11 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
   }
 });
 
-// POST Modificar Ajustes de Campaña (Ubicación activa y Secciones habilitadas por el Master)
+// POST Modificar Ajustes de Campaña (Ubicación activa, Viaje y Secciones habilitadas por el Master)
 app.post(['/api/campaigns/:code/settings', '/api/campaigns-settings.php'], async (req, res) => {
   try {
     const code = (req.params.code || req.body.code || '').toUpperCase();
-    const { active_location, unlocked_features, gm_pass } = req.body;
+    const { active_location, unlocked_features, travel_state, gm_pass } = req.body;
     const p = await getPool();
 
     const [rows] = await p.query(
@@ -316,6 +321,10 @@ app.post(['/api/campaigns/:code/settings', '/api/campaigns-settings.php'], async
     if (unlocked_features !== undefined) {
       updates.push('unlocked_features = ?');
       params.push(typeof unlocked_features === 'object' ? JSON.stringify(unlocked_features) : unlocked_features);
+    }
+    if (travel_state !== undefined) {
+      updates.push('travel_state = ?');
+      params.push(typeof travel_state === 'object' ? JSON.stringify(travel_state) : travel_state);
     }
 
     if (updates.length > 0) {
