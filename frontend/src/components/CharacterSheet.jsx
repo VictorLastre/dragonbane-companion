@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Heart, Zap, Shield, Sword, Sparkles, Backpack, 
   Dices, Plus, Minus, Check, Save, Coins, Skull, Flame
@@ -8,7 +8,7 @@ import {
   OFFICIAL_GENERAL_SKILLS, OFFICIAL_WEAPON_SKILLS, rollCheck, rollDamageFormula 
 } from '../utils/dragonbaneRules';
 
-export default function CharacterSheet({ initialChar, onSave, isSaving }) {
+export default function CharacterSheet({ initialChar, onSave, isSaving, onLiveUpdate }) {
   const [char, setChar] = useState(() => {
     // Si ya tiene skills iniciales, las usamos asegurando la estructura
     const baseChar = initialChar || {
@@ -90,6 +90,83 @@ export default function CharacterSheet({ initialChar, onSave, isSaving }) {
   const [rollModal, setRollModal] = useState(null);
   const [damageModal, setDamageModal] = useState(null);
   const [rollMode, setRollMode] = useState('normal'); // 'normal', 'boon', 'bane'
+
+  const isFirstMountRef = useRef(true);
+  const saveTimerRef = useRef(null);
+  const lastSavedCharRef = useRef(JSON.stringify(initialChar || {}));
+
+  // Auto-guardado en vivo (debounced 600ms) y notificación instantánea al cliente local
+  useEffect(() => {
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
+    }
+
+    // 1. Notificación inmediata al cliente local (PartyHUD y listados en 0ms)
+    if (onLiveUpdate) {
+      onLiveUpdate(char);
+    }
+
+    // 2. Guardado diferido al servidor para persistencia en MySQL
+    const currentStr = JSON.stringify(char);
+    if (currentStr !== lastSavedCharRef.current) {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = setTimeout(() => {
+        lastSavedCharRef.current = currentStr;
+        if (onSave) {
+          onSave(char, true); // true = silent (sin alertas invasivas)
+        }
+      }, 600);
+    }
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [char]);
+
+  // Sincronizar si llegan cambios externos de la campaña (descansos del GM en viaje, curaciones, etc.)
+  useEffect(() => {
+    if (!initialChar) return;
+    setChar(prev => {
+      if (!prev || prev.id !== initialChar.id) return initialChar;
+      const hpChanged = initialChar.hp_current !== undefined && initialChar.hp_current !== prev.hp_current;
+      const wpChanged = initialChar.wp_current !== undefined && initialChar.wp_current !== prev.wp_current;
+      const condChanged = JSON.stringify(initialChar.conditions) !== JSON.stringify(prev.conditions);
+      const restsChanged = JSON.stringify(initialChar.rests) !== JSON.stringify(prev.rests);
+      const deathChanged = JSON.stringify(initialChar.death_saves) !== JSON.stringify(prev.death_saves);
+
+      if (hpChanged || wpChanged || condChanged || restsChanged || deathChanged) {
+        const synced = {
+          ...prev,
+          hp_current: initialChar.hp_current !== undefined ? initialChar.hp_current : prev.hp_current,
+          hp_max: initialChar.hp_max !== undefined ? initialChar.hp_max : prev.hp_max,
+          wp_current: initialChar.wp_current !== undefined ? initialChar.wp_current : prev.wp_current,
+          wp_max: initialChar.wp_max !== undefined ? initialChar.wp_max : prev.wp_max,
+          conditions: initialChar.conditions ? { ...prev.conditions, ...initialChar.conditions } : prev.conditions,
+          rests: initialChar.rests ? { ...prev.rests, ...initialChar.rests } : prev.rests,
+          death_saves: initialChar.death_saves ? { ...prev.death_saves, ...initialChar.death_saves } : prev.death_saves
+        };
+        lastSavedCharRef.current = JSON.stringify(synced);
+        return synced;
+      }
+      return prev;
+    });
+  }, [
+    initialChar?.id,
+    initialChar?.hp_current,
+    initialChar?.hp_max,
+    initialChar?.wp_current,
+    initialChar?.wp_max,
+    JSON.stringify(initialChar?.conditions),
+    JSON.stringify(initialChar?.rests),
+    JSON.stringify(initialChar?.death_saves)
+  ]);
+
+  const handleManualSave = () => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    lastSavedCharRef.current = JSON.stringify(char);
+    if (onSave) onSave(char, false);
+  };
 
   // Sincronizar bonificadores de daño y máximos si cambian los atributos
   const handleAttributeChange = (attr, val) => {
@@ -277,7 +354,7 @@ export default function CharacterSheet({ initialChar, onSave, isSaving }) {
           </div>
 
           <button
-            onClick={() => onSave && onSave(char)}
+            onClick={handleManualSave}
             disabled={isSaving}
             className="flex items-center space-x-1.5 bg-amber-600 hover:bg-amber-500 text-stone-950 font-bold px-4 py-2 rounded-xl transition-all shadow-md active:scale-95 disabled:opacity-50"
           >

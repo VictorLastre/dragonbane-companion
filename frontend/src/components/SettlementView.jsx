@@ -58,6 +58,28 @@ export default function SettlementView({
     fetchShops();
   }, [location, campaign]);
 
+  // Polling silencioso en segundo plano para sincronizar tiendas activas y visibilidad en tiempo real
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const campCode = campaign ? campaign.code : '';
+      const url = `${apiBase}/shops.php?location=${encodeURIComponent(location || 'Puerto Brumoso')}${campCode ? `&campaign_code=${campCode}` : ''}&is_gm=${isGm ? 'true' : 'false'}`;
+      fetch(url)
+        .then(r => r.json())
+        .then(data => {
+          if (data.success && data.shops) {
+            setShops(prevShops => {
+              if (JSON.stringify(prevShops) !== JSON.stringify(data.shops)) {
+                return data.shops;
+              }
+              return prevShops;
+            });
+          }
+        })
+        .catch(() => {});
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [location, campaign?.code, isGm, apiBase]);
+
   const fetchShops = async () => {
     setLoading(true);
     try {

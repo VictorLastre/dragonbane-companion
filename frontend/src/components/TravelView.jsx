@@ -21,6 +21,7 @@ export default function TravelView({
   isGm,
   party = [],
   onUpdateCharacter,
+  onUpdateCampaign,
   apiBase,
   showNotification
 }) {
@@ -56,12 +57,12 @@ export default function TravelView({
   const [isRolling, setIsRolling] = useState(false);
   const [huntingResult, setHuntingResult] = useState(null);
 
-  // Sincronizar si cambia travel_state desde el polling del servidor
+  // Sincronizar automáticamente en vivo si cambia travel_state desde el polling del servidor
   useEffect(() => {
     if (campaign?.travel_state) {
       setTravelState(campaign.travel_state);
     }
-  }, [campaign?.travel_state]);
+  }, [JSON.stringify(campaign?.travel_state)]);
 
   // Guardar estado de viaje en el servidor MySQL
   const persistTravelState = async (newState) => {
@@ -76,6 +77,10 @@ export default function TravelView({
           travel_state: newState
         })
       });
+      // Notificar al estado de campaña para sincronización local inmediata
+      if (onUpdateCampaign) {
+        onUpdateCampaign({ ...campaign, travel_state: newState });
+      }
     } catch (e) {
       console.error('Error guardando estado de viaje:', e);
     }

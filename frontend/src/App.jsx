@@ -147,24 +147,52 @@ export default function App() {
     }
   }, []);
 
-  // Polling automático para sincronizar Party HUD y Ubicación activa cada 10 segundos
+  // Polling automático en tiempo real (cada 2.5s) para sincronizar Party HUD, Viajes y Ubicación
   useEffect(() => {
-    if (!campaign || !apiConnected) return;
+    if (!campaign?.code || !apiConnected) return;
     const interval = setInterval(() => {
       fetch(`${API_BASE}/campaigns.php?code=${campaign.code}`)
         .then(r => r.json())
         .then(data => {
           if (data.success) {
-            if (data.party) setParty(data.party);
-            if (data.campaign && data.campaign.active_location !== campaign.active_location) {
-              setCampaign(prev => prev ? { ...prev, active_location: data.campaign.active_location } : prev);
+            // Sincronizar grupo activo
+            if (data.party) {
+              setParty(data.party);
+              setCharacters(prevChars => {
+                if (!prevChars || prevChars.length === 0) return data.party;
+                return prevChars.map(pc => {
+                  const match = data.party.find(p => p.id === pc.id);
+                  return match ? { ...pc, ...match } : pc;
+                });
+              });
+            }
+
+            // Sincronizar estado de campaña (ubicación, viaje y características habilitadas)
+            if (data.campaign) {
+              setCampaign(prev => {
+                if (!prev) return data.campaign;
+                const locChanged = prev.active_location !== data.campaign.active_location;
+                const travelChanged = JSON.stringify(prev.travel_state) !== JSON.stringify(data.campaign.travel_state);
+                const unlockChanged = JSON.stringify(prev.unlocked_features) !== JSON.stringify(data.campaign.unlocked_features);
+                if (locChanged || travelChanged || unlockChanged) {
+                  const updated = {
+                    ...prev,
+                    active_location: data.campaign.active_location,
+                    travel_state: data.campaign.travel_state,
+                    unlocked_features: data.campaign.unlocked_features
+                  };
+                  localStorage.setItem('dragonbane_campaign', JSON.stringify(updated));
+                  return updated;
+                }
+                return prev;
+              });
             }
           }
         })
         .catch(() => {});
-    }, 10000);
+    }, 2500);
     return () => clearInterval(interval);
-  }, [campaign, apiConnected]);
+  }, [campaign?.code, apiConnected]);
 
   // Manejar cambio o creación de campaña
   const handleCampaignChange = (newCamp) => {
@@ -226,14 +254,26 @@ export default function App() {
     }
   };
 
-  // Guardar personaje
-  const handleSaveCharacter = async (charData) => {
-    setIsSaving(true);
+  // Actualización optimista instantánea (0ms) en la interfaz local
+  const handleLiveCharacterUpdate = (updatedChar) => {
+    if (!updatedChar || !updatedChar.id) return;
+    setParty(prevParty => prevParty.map(p => p.id === updatedChar.id ? { ...p, ...updatedChar } : p));
+    setCharacters(prevChars => prevChars.map(c => c.id === updatedChar.id ? { ...c, ...updatedChar } : c));
+  };
+
+  // Guardar personaje (admite modo silencioso para auto-guardado en vivo)
+  const handleSaveCharacter = async (charData, silent = false) => {
+    if (!silent) setIsSaving(true);
     let savedSuccessfully = false;
 
     // Vincular automáticamente a la campaña actual si existe
     if (campaign && campaign.code) {
       charData.campaign_code = campaign.code;
+    }
+
+    // Actualización optimista local inmediata para 0 latencia
+    if (charData.id) {
+      handleLiveCharacterUpdate(charData);
     }
 
     // 1. Guardar en API remota
@@ -273,16 +313,17 @@ export default function App() {
 
     setActiveChar(charToSave);
     setSelectedCharId(charToSave.id);
-    setIsSaving(false);
+    if (!silent) setIsSaving(false);
     setIsCreating(false);
 
-    // Refrescar lista de personajes y HUD
-    fetchCharacters(campaign);
-
-    showNotification(savedSuccessfully 
-      ? '¡Personaje guardado en el servidor MySQL!' 
-      : '¡Personaje guardado localmente (copia segura offline)!'
-    );
+    if (!silent) {
+      // Refrescar lista de personajes y HUD solo en guardado manual
+      fetchCharacters(campaign);
+      showNotification(savedSuccessfully 
+        ? '¡Personaje guardado en el servidor MySQL!' 
+        : '¡Personaje guardado localmente (copia segura offline)!'
+      );
+    }
   };
 
   // PANTALLA INICIAL (LOBBY / GATEWAY) SI NO HAY CAMPAÑA SELECCIONADA Y NO ESTÁ EN MODO LIBRE
@@ -647,6 +688,7 @@ export default function App() {
                     key={activeChar ? activeChar.id : 'default'}
                     initialChar={activeChar}
                     onSave={handleSaveCharacter}
+                    onLiveUpdate={handleLiveCharacterUpdate}
                     isSaving={isSaving}
                   />
                 </div>
@@ -660,7 +702,7 @@ export default function App() {
             location={activeLocation}
             campaign={campaign}
             isGm={isGm}
-            party={characters}
+            party={party.length > 0 ? party : characters}
             activeChar={activeChar}
             onUpdateCharacter={handleSaveCharacter}
             apiBase={API_BASE}
@@ -672,8 +714,9 @@ export default function App() {
           <TravelView
             campaign={campaign}
             isGm={isGm}
-            party={characters}
+            party={party.length > 0 ? party : characters}
             onUpdateCharacter={handleSaveCharacter}
+            onUpdateCampaign={(updatedCamp) => setCampaign(updatedCamp)}
             apiBase={API_BASE}
             showNotification={showNotification}
           />
