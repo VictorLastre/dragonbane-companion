@@ -6,10 +6,12 @@ import CampaignGateway from './components/CampaignGateway';
 import PartyHUD from './components/PartyHUD';
 import SettlementView from './components/SettlementView';
 import TravelView from './components/TravelView';
+import BestiaryView from './components/BestiaryView';
+import ProjectorView from './components/ProjectorView';
 import { 
   Users, ShoppingBag, Tv, Plus, CheckCircle, AlertCircle, Sparkles, 
   RefreshCw, Wand2, Crown, Shield, Link2, Copy, Check, MapPin, ChevronDown,
-  LogOut, Compass, Footprints
+  LogOut, Compass, Footprints, Flame
 } from 'lucide-react';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -126,6 +128,7 @@ export default function App() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const joinCode = params.get('join') || params.get('campana') || params.get('campaign');
+    const tvParam = params.get('tv');
 
     if (joinCode) {
       const cleanCode = joinCode.trim().toUpperCase();
@@ -142,6 +145,21 @@ export default function App() {
           }
         })
         .catch(e => console.error('Error al unirse mediante enlace:', e));
+    } else if (tvParam) {
+      const cleanTvCode = tvParam !== '1' && tvParam !== 'true' ? tvParam.trim().toUpperCase() : null;
+      if (cleanTvCode) {
+        fetch(`${API_BASE}/campaigns.php?code=${cleanTvCode}`)
+          .then(r => r.json())
+          .then(data => {
+            if (data.success && data.campaign) {
+              setCampaign(data.campaign);
+              if (data.party) setParty(data.party);
+            }
+          })
+          .catch(() => {});
+      }
+      setView('projector');
+      setStandaloneMode(true);
     } else {
       fetchCharacters();
     }
@@ -174,12 +192,14 @@ export default function App() {
                 const locChanged = prev.active_location !== data.campaign.active_location;
                 const travelChanged = JSON.stringify(prev.travel_state) !== JSON.stringify(data.campaign.travel_state);
                 const unlockChanged = JSON.stringify(prev.unlocked_features) !== JSON.stringify(data.campaign.unlocked_features);
-                if (locChanged || travelChanged || unlockChanged) {
+                const encounterChanged = JSON.stringify(prev.encounter_state) !== JSON.stringify(data.campaign.encounter_state);
+                if (locChanged || travelChanged || unlockChanged || encounterChanged) {
                   const updated = {
                     ...prev,
                     active_location: data.campaign.active_location,
                     travel_state: data.campaign.travel_state,
-                    unlocked_features: data.campaign.unlocked_features
+                    unlocked_features: data.campaign.unlocked_features,
+                    encounter_state: data.campaign.encounter_state
                   };
                   localStorage.setItem('dragonbane_campaign', JSON.stringify(updated));
                   return updated;
@@ -450,6 +470,19 @@ export default function App() {
               <Footprints className="w-3.5 h-3.5" />
               <span>Viajes y Campamento</span>
             </button>
+
+            {/* Pestaña Bestiario y Combate (Solo Master) */}
+            {isGm && (
+              <button
+                onClick={() => { setView('bestiary'); setIsCreating(false); }}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                  view === 'bestiary' ? 'bg-rose-600 text-white shadow-md font-bold' : 'text-stone-300 hover:text-white'
+                }`}
+              >
+                <Flame className="w-3.5 h-3.5 text-rose-400" />
+                <span>Bestiario & Combate</span>
+              </button>
+            )}
 
             {/* Visor TV: SOLO VISIBLE PARA EL MASTER */}
             {isGm && (
@@ -722,16 +755,24 @@ export default function App() {
           />
         )}
 
-        {view === 'projector' && isGm && (
-          <div className="max-w-4xl mx-auto p-4 sm:p-8 text-center space-y-4">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-sky-600/20 border border-sky-500/30 flex items-center justify-center text-sky-400 shadow-xl">
-              <Tv className="w-8 h-8" />
-            </div>
-            <h2 className="text-2xl font-black text-sky-100">Visor TV / Pantalla Compartida</h2>
-            <p className="text-sm text-stone-400 max-w-md mx-auto">
-              Abre esta pantalla en tu Smart TV o segunda pantalla. Desde tu panel de director podrás hacer clic en "Mostrar NPC" o "Mostrar Mapa" para que aparezca aquí inmediatamente en tamaño completo.
-            </p>
-          </div>
+        {view === 'bestiary' && isGm && (
+          <BestiaryView
+            campaign={campaign}
+            isGm={isGm}
+            party={party.length > 0 ? party : characters}
+            apiBase={API_BASE}
+            showNotification={showNotification}
+            onUpdateCampaign={(updatedCamp) => setCampaign(updatedCamp)}
+          />
+        )}
+
+        {view === 'projector' && (
+          <ProjectorView
+            campaign={campaign}
+            isGm={isGm}
+            party={party.length > 0 ? party : characters}
+            apiBase={API_BASE}
+          />
         )}
       </main>
     </div>

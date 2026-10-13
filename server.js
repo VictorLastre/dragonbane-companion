@@ -142,6 +142,7 @@ async function initDatabase() {
     await checkAndAddColumn('campaigns', 'active_location', "VARCHAR(100) DEFAULT 'Puerto Brumoso'");
     await checkAndAddColumn('campaigns', 'unlocked_features', 'JSON NULL');
     await checkAndAddColumn('campaigns', 'travel_state', 'JSON NULL');
+    await checkAndAddColumn('campaigns', 'encounter_state', 'JSON NULL');
     await checkAndAddColumn('characters', 'weakness', 'VARCHAR(255) DEFAULT ""');
     await checkAndAddColumn('characters', 'secondary_skills', 'JSON');
     await checkAndAddColumn('characters', 'heroic_abilities_and_spells', 'TEXT');
@@ -250,7 +251,7 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 
     const p = await getPool();
     const [rows] = await p.query(
-      'SELECT id, code, name, description, gm_name, active_location, unlocked_features, travel_state, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
+      'SELECT id, code, name, description, gm_name, active_location, unlocked_features, travel_state, encounter_state, created_at FROM campaigns WHERE code = ? OR UPPER(name) = ? OR UPPER(REPLACE(name, " ", "")) = ?',
       [code, code, code]
     );
     if (rows.length === 0) {
@@ -266,6 +267,12 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 
     if (typeof campaign.travel_state === 'string') {
       try { campaign.travel_state = JSON.parse(campaign.travel_state); } catch(e) { campaign.travel_state = null; }
+    }
+
+    if (typeof campaign.encounter_state === 'string') {
+      try { campaign.encounter_state = JSON.parse(campaign.encounter_state); } catch(e) { campaign.encounter_state = []; }
+    } else if (!Array.isArray(campaign.encounter_state)) {
+      campaign.encounter_state = [];
     }
 
     // Obtener SOLO los héroes vinculados a esta campaña
@@ -298,7 +305,7 @@ app.get(['/api/campaigns/:code', '/api/campaigns.php'], async (req, res) => {
 app.post(['/api/campaigns/:code/settings', '/api/campaigns-settings.php'], async (req, res) => {
   try {
     const code = (req.params.code || req.body.code || '').toUpperCase();
-    const { active_location, unlocked_features, travel_state, gm_pass } = req.body;
+    const { active_location, unlocked_features, travel_state, encounter_state, gm_pass } = req.body;
     const p = await getPool();
 
     const [rows] = await p.query(
@@ -325,6 +332,10 @@ app.post(['/api/campaigns/:code/settings', '/api/campaigns-settings.php'], async
     if (travel_state !== undefined) {
       updates.push('travel_state = ?');
       params.push(typeof travel_state === 'object' ? JSON.stringify(travel_state) : travel_state);
+    }
+    if (encounter_state !== undefined) {
+      updates.push('encounter_state = ?');
+      params.push(typeof encounter_state === 'object' ? JSON.stringify(encounter_state) : encounter_state);
     }
 
     if (updates.length > 0) {
@@ -753,7 +764,14 @@ app.delete(['/api/shops/:id', '/api/shops.php'], async (req, res) => {
 const getScreenHandler = async (req, res) => {
   try {
     const p = await getPool();
-    const [rows] = await p.query('SELECT * FROM screen_broadcast WHERE id = 1');
+    const campCode = req.query.campaign_code ? req.query.campaign_code.toUpperCase().trim() : null;
+    let sql = 'SELECT * FROM screen_broadcast WHERE id = 1';
+    let params = [];
+    if (campCode) {
+      sql = 'SELECT * FROM screen_broadcast WHERE campaign_code = ? OR id = 1 ORDER BY (campaign_code = ?) DESC LIMIT 1';
+      params = [campCode, campCode];
+    }
+    const [rows] = await p.query(sql, params);
     res.json({ success: true, screen: rows[0] || {} });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -764,10 +782,12 @@ const updateScreenHandler = async (req, res) => {
   try {
     const p = await getPool();
     const data = req.body;
+    const campCode = data.campaign_code ? data.campaign_code.toUpperCase().trim() : null;
     const sql = `
-      INSERT INTO screen_broadcast (id, mode, title, subtitle, image_url, description, is_active)
-      VALUES (1, ?, ?, ?, ?, ?, ?)
+      INSERT INTO screen_broadcast (id, campaign_code, mode, title, subtitle, image_url, description, is_active)
+      VALUES (1, ?, ?, ?, ?, ?, ?, ?)
       ON DUPLICATE KEY UPDATE
+        campaign_code = VALUES(campaign_code),
         mode = VALUES(mode),
         title = VALUES(title),
         subtitle = VALUES(subtitle),
@@ -776,6 +796,7 @@ const updateScreenHandler = async (req, res) => {
         is_active = VALUES(is_active)
     `;
     await p.query(sql, [
+      campCode,
       data.mode || 'npc',
       data.title || '',
       data.subtitle || '',
